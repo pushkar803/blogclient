@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os/exec"
+	"strings"
 
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 
@@ -15,10 +16,12 @@ import (
 	"github.com/ignite-hq/cli/ignite/pkg/cosmosclient"
 )
 
+var aliceAddress = ""
+
 type UserCreateResponse struct {
-	Name     string "json:creator"
-	Address  string "json:title"
-	Mnemonic string "json:body"
+	Name     string "json:name"
+	Address  string "json:address"
+	Mnemonic string "json:mnemonic"
 }
 
 type BlogPost struct {
@@ -47,6 +50,8 @@ func main() {
 	router.GET("/posts", validateUser(cosmos), getAllPosts)
 	router.POST("/post", validateUser(cosmos), createPost)
 	router.GET("/myBalance", validateUser(cosmos), fetchBalance)
+	router.POST("/addReward", validateUser(cosmos), addReward)
+
 	router.Run("localhost:8080")
 
 }
@@ -56,7 +61,7 @@ func validateUser(cosmos cosmosclient.Client) gin.HandlerFunc {
 		authToken := c.Request.Header["Authorization"]
 
 		if len(authToken) == 0 {
-			c.JSON(http.StatusUnauthorized, gin.H{"Message": "Unauthorized"})
+			c.JSON(http.StatusUnauthorized, gin.H{"message": "Unauthorized"})
 			c.Abort()
 			return
 		}
@@ -66,7 +71,7 @@ func validateUser(cosmos cosmosclient.Client) gin.HandlerFunc {
 
 		if err != nil || address.String() == "" {
 			//c.Header("WWW-Authenticate", "Basic realm=\"Authorization Required\"")
-			c.JSON(http.StatusUnauthorized, gin.H{"Message": "Unauthorized"})
+			c.JSON(http.StatusUnauthorized, gin.H{"message": "Unauthorized"})
 			c.Abort()
 			return
 		}
@@ -81,15 +86,39 @@ func validateUser(cosmos cosmosclient.Client) gin.HandlerFunc {
 func fetchBalance(c *gin.Context) {
 	cosmos, err := cosmosclient.New(context.Background())
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"Message": "Failed To Get Balance"})
+		c.JSON(http.StatusOK, gin.H{"message": "Failed To Get Balance"})
 		return
 	}
 	b, err := getBalance(c, cosmos)
 	c.JSON(http.StatusOK, gin.H{"Balance": b})
 }
 
+func addReward(c *gin.Context) {
+
+	toAddr := c.GetString("userAddress")
+
+	cmd := exec.Command("blogd", "keys", "show", "alice", "-a")
+	buf, err := cmd.CombinedOutput()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "addReward Failed: failed to construct fromAddr"})
+		return
+	}
+	fromAddr := string(buf)
+	fromAddr = strings.TrimSuffix(fromAddr, "\n")
+
+	cmd = exec.Command("blogd", "tx", "bank", "send", fromAddr, toAddr, "10stake", "--chain-id", "blog", "-y")
+	buf, err = cmd.CombinedOutput()
+
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "addReward Failed: failed to construct send transaction"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "addReward Success", "data": fromAddr + "00" + toAddr})
+}
+
 func userLogin(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"Message": "Login Sucess"})
+	c.JSON(http.StatusOK, gin.H{"message": "Login Sucess"})
 }
 
 func userRegister(c *gin.Context) {
@@ -99,20 +128,27 @@ func userRegister(c *gin.Context) {
 	cmd := exec.Command("blogd", "keys", "add", newUser.Name, "--output", "json")
 	buf, err := cmd.CombinedOutput()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{"Message": "Register Failed"})
+		c.JSON(http.StatusOK, gin.H{"message": "Register Failed: failed to add key (use different name)"})
 		return
 	}
 	op := string(buf)
-	fmt.Println(op)
 
-	c.JSON(http.StatusOK, gin.H{"Message": "Register Failed", "op": op})
+	var x UserCreateResponse
+	err = json.Unmarshal([]byte(op), &x)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "Register Failed: failed to unmarshal add key output"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Register Success", "data": x})
 }
 
 func createPost(c *gin.Context) {
 
 	cosmos, err := cosmosclient.New(context.Background())
 	if err != nil {
-		log.Fatal(err)
+		c.JSON(http.StatusOK, gin.H{"message": "createPost Failed: failed to construct cosmosclient"})
+		return
 	}
 
 	accountName := c.GetString("authToken")
@@ -128,11 +164,11 @@ func createPost(c *gin.Context) {
 
 	txResp, err := cosmos.BroadcastTx(accountName, msg)
 	if err != nil {
-		log.Fatal(err)
+		c.JSON(http.StatusOK, gin.H{"message": "createPost Failed: failed to construct BroadcastTx"})
+		return
 	}
 
 	c.IndentedJSON(http.StatusOK, txResp)
-
 }
 
 func getAllPosts(c *gin.Context) {
@@ -148,7 +184,6 @@ func getAllPosts(c *gin.Context) {
 		log.Fatal(err)
 	}
 	c.IndentedJSON(http.StatusOK, queryResp)
-
 }
 
 func getBalance(c *gin.Context, cosmos cosmosclient.Client) (string, error) {
