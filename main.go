@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os/exec"
@@ -34,6 +35,82 @@ type NewUser struct {
 	Name string "json:name"
 }
 
+type MintRequest struct {
+	TokenURI string "json:tokenURI"
+}
+
+type BurnRequest struct {
+	NftId string "json:nftId"
+}
+
+type TransferRequest struct {
+	NftId     string "json:nftId"
+	ToAddress string "json:toAddress"
+}
+
+type DistributeRequest struct {
+	NftIds      string "json:nftIds"
+	ToAddresses string "json:toAddresses"
+}
+
+type NftItem struct {
+	Owner    string "json:owner"
+	Id       string "json:id"
+	TokenURI string "json:tokenURI"
+}
+
+type JsonOP struct {
+	NftItem []NftItem "json:NftItem"
+}
+
+type SingleJsonOP struct {
+	NftItem NftItem "json:NftItem"
+}
+type NftIDLists struct {
+	NftIDList  []string `json:"nftIdList"`
+	Pagination struct {
+		NextKey interface{} `json:"next_key"`
+		Total   string      `json:"total"`
+	} `json:"pagination"`
+}
+
+type UserTotalNFTs struct {
+	Total string `json:"total"`
+}
+
+type TxJsonOutput struct {
+	Height    string `json:"height"`
+	Txhash    string `json:"txhash"`
+	Codespace string `json:"codespace"`
+	Code      int    `json:"code"`
+	Data      string `json:"data"`
+	RawLog    string `json:"raw_log"`
+	Logs      []struct {
+		MsgIndex int    `json:"msg_index"`
+		Log      string `json:"log"`
+		Events   []struct {
+			Type       string `json:"type"`
+			Attributes []struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+			} `json:"attributes"`
+		} `json:"events"`
+	} `json:"logs"`
+	Info      string      `json:"info"`
+	GasWanted string      `json:"gas_wanted"`
+	GasUsed   string      `json:"gas_used"`
+	Tx        interface{} `json:"tx"`
+	Timestamp string      `json:"timestamp"`
+	Events    []struct {
+		Type       string `json:"type"`
+		Attributes []struct {
+			Key   string `json:"key"`
+			Value string `json:"value"`
+			Index bool   `json:"index"`
+		} `json:"attributes"`
+	} `json:"events"`
+}
+
 func main() {
 
 	router := gin.Default()
@@ -52,8 +129,185 @@ func main() {
 	router.GET("/myBalance", validateUser(cosmos), fetchBalance)
 	router.POST("/addReward", validateUser(cosmos), addReward)
 
-	router.Run("localhost:8080")
+	//NFT routes
+	router.POST("/mint", validateUser(cosmos), mint)
+	router.POST("/burn", validateUser(cosmos), burn)
+	router.POST("/transfer", validateUser(cosmos), transfer)
+	router.POST("/distribute", validateUser(cosmos), distribute)
 
+	router.GET("/list_nft_item", validateUser(cosmos), listAllNfts)
+	router.GET("/show_nft_item/:nftId", validateUser(cosmos), showNftById)
+	router.GET("/list_nft_id_of_owner/:ownerAddress", validateUser(cosmos), listNftsOfOwner)
+	router.GET("/nft_count_of/:ownerAddress", validateUser(cosmos), GetCountOfNfts)
+
+	router.Run("localhost:8089")
+
+}
+
+func listAllNfts(c *gin.Context) {
+
+	cmd := exec.Command("blogd", "q", "sagenft", "list-nft-item", "--output", "json")
+	buf, err := cmd.CombinedOutput()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "listAllNfts Failed"})
+		return
+	}
+	op := string(buf)
+
+	var x JsonOP
+	err = json.Unmarshal([]byte(op), &x)
+	fmt.Println(err)
+	if err != nil {
+		c.JSON(http.StatusOK, "failed")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"output": x})
+}
+
+func showNftById(c *gin.Context) {
+
+	nftId := c.Param("nftId")
+	cmd := exec.Command("blogd", "q", "sagenft", "show-nft-item", nftId, "--output", "json")
+	buf, err := cmd.CombinedOutput()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "showNftById Failed"})
+		return
+	}
+	op := string(buf)
+	var x SingleJsonOP
+	err = json.Unmarshal([]byte(op), &x)
+	if err != nil {
+		c.JSON(http.StatusOK, "failed")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"output": x})
+}
+
+func listNftsOfOwner(c *gin.Context) {
+
+	ownerAddress := c.Param("ownerAddress")
+	cmd := exec.Command("blogd", "q", "sagenft", "list-nft-id-of-owner", ownerAddress, "--output", "json")
+	buf, err := cmd.CombinedOutput()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "listNftsOfOwner Failed"})
+		return
+	}
+	op := string(buf)
+	var x NftIDLists
+	err = json.Unmarshal([]byte(op), &x)
+	if err != nil {
+		c.JSON(http.StatusOK, "failed")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"output": x})
+}
+
+func GetCountOfNfts(c *gin.Context) {
+
+	ownerAddress := c.Param("ownerAddress")
+	cmd := exec.Command("blogd", "q", "sagenft", "nft-count-of", ownerAddress, "--output", "json")
+	buf, err := cmd.CombinedOutput()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "GetCountOfNfts Failed"})
+		return
+	}
+	op := string(buf)
+	var x UserTotalNFTs
+	err = json.Unmarshal([]byte(op), &x)
+	if err != nil {
+		c.JSON(http.StatusOK, "failed")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"output": x})
+}
+
+func mint(c *gin.Context) {
+
+	var mintRequest MintRequest
+	c.BindJSON(&mintRequest)
+
+	cmd := exec.Command("blogd", "tx", "sagenft", "mint", mintRequest.TokenURI, "--output", "json", "--from", c.GetString("authToken"), "-y")
+	buf, err := cmd.CombinedOutput()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "Mint Failed"})
+		return
+	}
+	op := string(buf)
+	var x TxJsonOutput
+	err = json.Unmarshal([]byte(op), &x)
+	if err != nil {
+		c.JSON(http.StatusOK, "failed")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"output": x})
+}
+
+func burn(c *gin.Context) {
+
+	var burnRequest BurnRequest
+	c.BindJSON(&burnRequest)
+	cmd := exec.Command("blogd", "tx", "sagenft", "burn", burnRequest.NftId, "--output", "json", "--from", c.GetString("authToken"), "-y")
+	buf, err := cmd.CombinedOutput()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "Burn Failed"})
+		return
+	}
+	op := string(buf)
+	var x TxJsonOutput
+	err = json.Unmarshal([]byte(op), &x)
+	if err != nil {
+		c.JSON(http.StatusOK, "failed")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"output": x})
+}
+
+func transfer(c *gin.Context) {
+
+	var transferRequest TransferRequest
+	c.BindJSON(&transferRequest)
+	cmd := exec.Command("blogd", "tx", "sagenft", "transfer", transferRequest.NftId, transferRequest.ToAddress, "--output", "json", "--from", c.GetString("authToken"), "-y")
+	buf, err := cmd.CombinedOutput()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "Transfer Failed"})
+		return
+	}
+	op := string(buf)
+	var x TxJsonOutput
+	err = json.Unmarshal([]byte(op), &x)
+	if err != nil {
+		c.JSON(http.StatusOK, "failed")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"output": x})
+}
+
+func distribute(c *gin.Context) {
+
+	var distributeRequest DistributeRequest
+	c.BindJSON(&distributeRequest)
+	cmd := exec.Command("blogd", "tx", "sagenft", "distribute", distributeRequest.NftIds, distributeRequest.ToAddresses, "--output", "json", "--from", c.GetString("authToken"), "-y")
+	buf, err := cmd.CombinedOutput()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "Distribute Failed"})
+		return
+	}
+	op := string(buf)
+	var x TxJsonOutput
+	err = json.Unmarshal([]byte(op), &x)
+	if err != nil {
+		c.JSON(http.StatusOK, "failed")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"output": x})
 }
 
 func validateUser(cosmos cosmosclient.Client) gin.HandlerFunc {
